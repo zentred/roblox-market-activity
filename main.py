@@ -1,61 +1,89 @@
-import requests, json, datetime, time, re, threading
-from discord_webhook import DiscordWebhook, DiscordEmbed
+import requests, random
 
-itemDetails = None
-cookie = 'put your roblox cookie here' # needed for grabbing price from roblox.com requires cookie
-webhook = 'put your discord webhook here'
+updateWebhook = ''
+significantWebhook = ''
 
-def itemInfo():
-    global itemDetails
-    while True:
-        itemDetails = json.loads(
-                re.search('item_details = (.*?);', requests.get('https://www.rolimons.com/itemtable').text).group(1)
-            )
-        time.sleep(180)
+class Bot:
 
-threading.Thread(target=itemInfo).start()
-time.sleep(3)
+    def __init__(self, proxies):
+        self.proxies = proxies
+        self.rap = self.rapDict()
+        self.constants()
 
-def checkMarket():
-    checked = []
-    while True:
-        try:
-            response = json.loads(
-                re.search('initial_activity = (.*?);', requests.get('https://www.rolimons.com/marketactivity').text).group(1)
-            )
-            for sale in response: # assetId, oldRap, newRap = sale[1], sale[3], sale[4]
-                if sale[-1] not in checked:
-                    checked.append(sale[-1])
-                    salePrice = round(sale[3] - (sale[3] - sale[4])*10)
+    def rapDict(self):
+        cursor, arr = '', {}
+        while cursor != None:
+            try:
+                resp = requests.get(
+                    f'https://inventory.roblox.com/v1/users/1/assets/collectibles?sortOrder=Asc&limit=100&cursor={cursor}',
+                    proxies = {'https': f'http://{random.choice(self.proxies)}'}, timeout = 5
+                ).json()
+                for item in resp['data']:
+                    arr[str(item['assetId'])] = item['recentAveragePrice']
+                cursor = resp['nextPageCursor']
+            except:
+                pass
+        return arr
 
-                    averagePrice = int(requests.get(f'https://www.roblox.com/catalog/{sale[1]}', cookies = {'.ROBLOSECURITY': cookie}).text.split('expected-price="')[1].split('"')[0])
+    def constants(self):
+        while True:
+            cursor = ''
+            while cursor != None:
+                try:
+                    resp = requests.get(
+                        f'https://inventory.roblox.com/v1/users/1/assets/collectibles?sortOrder=Asc&limit=100&cursor={cursor}',
+                        proxies = {'https': f'http://{random.choice(self.proxies)}'}, timeout = 5
+                    ).json()
+                    for item in resp['data']:
+                        assetId = str(item['assetId'])
+                        if assetId in self.rap:
+                            currentRap, previousRap = item['recentAveragePrice'], self.rap[assetId]
+                            if currentRap != previousRap:
+                                self.sendWebhook(assetId, item['name'], currentRap, previousRap, round(previousRap - ((previousRap-currentRap)*10)))
+                                self.rap[assetId] = currentRap
+                    cursor = resp['nextPageCursor']
+                except:
+                    pass
 
-                    if salePrice <= averagePrice*0.7 or salePrice >= sale[3]*2:
+    def grabImage(self, assetId):
+        while True:
+            try:
+                resp = requests.get(
+                    f'https://thumbnails.roblox.com/v1/assets?assetIds={assetId}&returnPolicy=0&size=250x250&format=Png&isCircular=false',
+                    proxies = {'https': f'http://{random.choice(self.proxies)}'}, timeout = 3
+                ).json()
+                if 'data' in resp:
+                    return resp['data'][0]['imageUrl']
+            except:
+                pass
 
-                        webhook = DiscordWebhook(
-                            url=webhook
-                        )
+    def sendWebhook(self, assetId, assetName, currentRap, previousRap, salePrice):
+        if previousRap*0.5 < salePrice < previousRap*2: webhook = updateWebhook
+        else: webhook = significantWebhook
+        if previousRap < currentRap: color = '1DC321'
+        else: color = 'C31D1D'
 
-                        embed = DiscordEmbed(
-                            title=f"{itemDetails[str(sale[1])][0]}",
-                            url=f'https://www.rolimons.com/item/{sale[1]}',
-                            color='aa70e6'
-                        )
+        requests.post(
+            webhook,
+            json = {
+                'embeds': [{
+                    'author': {
+                        'name': f'{assetName}',
+                        'url': f'https://www.rolimons.com/item/{assetId}'
+                    },
+                    'thumbnail': {
+                        'url': self.grabImage(assetId)
+                    },
+                    'fields': [
+                        {'name': 'Old RAP', 'value': f'{"{:,}".format(previousRap)}', 'inline':True},
+                        {'name': 'New RAP', 'value': f'{"{:,}".format(currentRap)}', 'inline':True},
+                        {'name': 'Sale Price', 'value': f'{"{:,}".format(salePrice)}', 'inline':True},
+                    ],
+                    'color': int(color,16)
+                }
+            ]}
+        )
 
-                        embed.add_embed_field(name='Sale Price', value=salePrice, inline=True)
-                        embed.add_embed_field(name='\u200b', value='\u200b', inline=True)
-                        embed.add_embed_field(name='Normal Price', value=averagePrice, inline=True)
-                        embed.add_embed_field(name='New RAP', value=str(sale[4]), inline=True)
-                        embed.add_embed_field(name='Old RAP', value=str(sale[3]), inline=True)
-                        embed.set_thumbnail(url=f"{itemDetails[str(sale[1])][-1]}")
-
-                        webhook.add_embed(embed)
-                        response = webhook.execute()
-            time.sleep(60)
-        except:
-            time.sleep(15)
-            pass
-
-
-
-checkMarket()
+Bot(
+    open('proxies.txt').read().splitlines()
+)
